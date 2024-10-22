@@ -1,13 +1,18 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import folium
-from folium.plugins import HeatMap
-from streamlit_folium import folium_static
 import seaborn as sns
 import matplotlib.pyplot as plt
+import pydeck as pdk
+import joblib 
+from sklearn.preprocessing import LabelEncoder  
 
-# Load dataset function
+# ------------------ Paths to Files and Model ------------------ #
+best_model_path = r'D:\GUVI_Projects\My_Projects\best_model.joblib'
+cleaned_data_path = r'D:\GUVI_Projects\My_Projects\cleaned_airbnb_data.csv'
+file_path = r'D:\GUVI_Projects\My_Projects\updated_cleaned_airbnb_data.csv'
+
+# ------------------ Load Dataset ------------------ #
 @st.cache_data
 def load_data(file_path):
     data = pd.read_csv(file_path)
@@ -21,95 +26,110 @@ def load_data(file_path):
         data['longitude'] = pd.to_numeric(data['longitude'], errors='coerce').fillna(0)
     return data
 
-# Geospatial Visualization
+# ------------------ Load Trained Model ------------------ #
+@st.cache_data
+def load_model(model_path):
+    model = joblib.load(model_path)
+    return model
+
+# ------------------ Encode Categorical Features ------------------ #
+def encode_features(df, feature):
+    encoder = LabelEncoder()
+    df[feature] = encoder.fit_transform(df[feature])
+    return df, encoder
+
+# ------------------ Geospatial Visualization with Pydeck ------------------ #
 def geospatial_visualization(df):
     st.title("Geospatial Visualization of Airbnb Listings")
-    st.header("Map of Listings")
+
+    # Pydeck for map visualization
+    st.pydeck_chart(pdk.Deck(
+        initial_view_state=pdk.ViewState(
+            latitude=df['latitude'].mean(),
+            longitude=df['longitude'].mean(),
+            zoom=11,
+            pitch=50,
+        ),
+        layers=[
+            pdk.Layer(
+                'HexagonLayer',
+                data=df[['latitude', 'longitude']],
+                get_position='[longitude, latitude]',
+                radius=200,
+                elevation_scale=4,
+                elevation_range=[0, 1000],
+                extruded=True,
+            ),
+        ],
+    ))
+
+    st.header("Heat Map of Listings")
+    heatmap_layer = pdk.Layer(
+        'HeatmapLayer',
+        data=df[['latitude', 'longitude']],
+        get_position='[longitude, latitude]',
+        radius=200,
+        threshold=0.3
+    )
     
-    # Basic Scatter Map
-    if 'number_of_reviews' in df.columns:
-        map_fig = px.scatter_mapbox(df, lat="latitude", lon="longitude", color="price",
-                                     size="number_of_reviews", hover_name="name",
-                                     mapbox_style="open-street-map", zoom=10,
-                                     title="Distribution of Airbnb Listings")
-        st.plotly_chart(map_fig)
-        st.write("This map visualizes the distribution of Airbnb listings. The size of the markers indicates the number of reviews, while the color represents the price range. Areas with larger markers signify more popular listings.")
+    st.pydeck_chart(pdk.Deck(layers=[heatmap_layer], initial_view_state=pdk.ViewState(
+        latitude=df['latitude'].mean(),
+        longitude=df['longitude'].mean(),
+        zoom=11,
+        pitch=50,
+    )))
 
-    # Geospatial Distribution of Prices
-    st.header("Geospatial Distribution of Prices")
-    price_map_fig = px.scatter_mapbox(df, lat="latitude", lon="longitude", color="price",
-                                       size_max=15, hover_name="name",
-                                       mapbox_style="open-street-map", zoom=10,
-                                       title="Geospatial Distribution of Prices")
-    st.plotly_chart(price_map_fig)
-    st.write("The map shows how prices vary across different geographical locations. Areas with darker colors indicate higher average prices, providing insights into expensive neighborhoods.")
-
-    # Hot Spot Map
-    st.header("Hot Spot Map of Listings")
-    heat_map_data = df[['latitude', 'longitude', 'price']].dropna()
-    heat_map_data = heat_map_data[heat_map_data['price'] > 0]  # Filter out non-positive prices
-    heat_map = folium.Map(location=[heat_map_data['latitude'].mean(), heat_map_data['longitude'].mean()], zoom_start=12)
-    HeatMap(data=heat_map_data[['latitude', 'longitude']], radius=15, max_zoom=13).add_to(heat_map)
-
-    st.write("This hot spot map highlights areas with high concentrations of Airbnb listings. Darker areas indicate more listings, which can suggest popular locations for travelers.")
-    
-    # Render the folium map
-    folium_static(heat_map)
-
-# Availability Analysis
-def availability_analysis(df):
-    st.title("Availability Analysis of Airbnb Listings")
-    
-    # Seasonal Availability Analysis
-    st.header("Availability Analysis by Season")
-    df['season'] = pd.cut(df['availability_365'], bins=[-1, 90, 180, 270, 365], 
-                          labels=['Low', 'Moderate', 'High', 'Very High'])
-    
-    season_counts = df['season'].value_counts().sort_index()
-    bar_fig = px.bar(season_counts, x=season_counts.index, y=season_counts.values,
-                      title='Availability by Season', labels={'x': 'Season', 'y': 'Count'})
-    st.plotly_chart(bar_fig)
-    st.write("This bar chart illustrates the distribution of listings across different availability seasons. A higher count in 'Very High' indicates a large number of listings available year-round.")
-
-    # Seasonal Booking Patterns
-    df['month'] = pd.to_datetime(df['last_scraped']).dt.month
-    monthly_availability = df.groupby('month')['availability_365'].mean().reset_index()
-    line_fig = px.line(monthly_availability, x='month', y='availability_365',
-                        title='Average Monthly Availability', labels={'month': 'Month', 'availability_365': 'Average Availability'})
-    st.plotly_chart(line_fig)
-    st.write("This line chart displays the average availability of listings throughout the year. Peaks during certain months may indicate seasonal demand variations.")
-
-# Price Analysis
+# ------------------ Price Analysis with Colorful Charts ------------------ #
 def price_analysis(df):
-    st.title("Price Analysis of Airbnb Listings")
-    st.header("Average Price Trends Over Time")
-    df['last_scraped'] = pd.to_datetime(df['last_scraped'])
-    time_series_fig = px.line(df, x="last_scraped", y="price", title="Average Price Trends Over Time",
-                               labels={"last_scraped": "Date", "price": "Average Price"})
-    st.plotly_chart(time_series_fig)
-    st.write("This line chart illustrates how average prices have changed over time. Notable spikes may indicate increased demand during certain periods, such as holidays or events.")
+    st.title("Price Analysis")
+    st.header("Price Trends Over Time")
+
+    # Colorful Line Chart using Plotly
+    fig = px.line(df, x='last_scraped', y='price', title="Price Trends", color_discrete_sequence=px.colors.sequential.Plasma)
+    st.plotly_chart(fig)
 
     st.header("Price Distribution by Property Type")
-    property_type_filter = st.selectbox("Select Property Type", options=df['property_type'].unique())
-    filtered_df = df[df['property_type'] == property_type_filter]
-    box_fig = px.box(filtered_df, x="property_type", y="price", title="Price Distribution by Property Type")
-    st.plotly_chart(box_fig)
-    st.write("The box plot displays the distribution of prices for the selected property type. The central line represents the median price, while the boxes show the interquartile range. Outliers may suggest unique, high-priced listings.")
+    property_type = st.selectbox("Select Property Type", df['property_type'].unique())
+    filtered_data = df[df['property_type'] == property_type]
 
-# Advanced Visualizations
+    # Boxplot with Seaborn (for more colorful chart)
+    fig, ax = plt.subplots()
+    sns.boxplot(data=filtered_data, y='price', palette='Set2', ax=ax)
+    ax.set_title(f"Price Distribution for {property_type}")
+    st.pyplot(fig)
+
+# ------------------ Availability Analysis ------------------ #
+def availability_analysis(df):
+    st.title("Availability Analysis")
+    st.header("Seasonal Availability")
+
+    df['season'] = pd.cut(df['availability_365'], bins=[-1, 90, 180, 270, 365],
+                          labels=['Low', 'Moderate', 'High', 'Very High'])
+    season_counts = df['season'].value_counts().sort_index()
+
+    # Colorful Bar Chart using Plotly
+    fig = px.bar(season_counts, x=season_counts.index, y=season_counts.values,
+                 title="Availability by Season", color=season_counts.index, color_discrete_sequence=px.colors.qualitative.Safe)
+    st.plotly_chart(fig)
+
+# ------------------ Advanced Visualizations ------------------ #
 def advanced_visualizations(df):
     st.title("Advanced Visualizations of Airbnb Listings")
+    
+    # Pair Plot
     st.header("Pair Plot of Price and Other Variables")
     pair_plot_fig = sns.pairplot(df[['price', 'number_of_reviews', 'availability_365', 'latitude', 'longitude']])
     st.pyplot(pair_plot_fig)
     st.write("This pair plot visualizes relationships between price and other key variables. Look for trends or clusters that might indicate pricing strategies based on reviews or location.")
 
+    # Sunburst Chart
     st.header("Sunburst Chart of Property Types and Prices")
     sunburst_fig = px.sunburst(df, path=['neighbourhood_cleansed', 'property_type'], values='price',
                                 title="Sunburst Chart of Property Types and Prices")
     st.plotly_chart(sunburst_fig)
     st.write("The sunburst chart shows the hierarchical relationship between neighborhoods and property types concerning their average prices. This visualization can help identify which property types dominate specific neighborhoods.")
 
+    # Choropleth Map
     st.header("Choropleth Map of Average Prices by Neighbourhood")
     choropleth_fig = px.choropleth(df, locations='neighbourhood_cleansed', locationmode='country names',
                                     color='price', hover_name='neighbourhood_cleansed',
@@ -117,6 +137,7 @@ def advanced_visualizations(df):
     st.plotly_chart(choropleth_fig)
     st.write("This choropleth map visualizes average prices by neighborhood. Darker shades indicate higher average prices, which may correlate with factors like location and amenities.")
 
+    # Box and Violin Plot
     st.header("Price Distribution with Box and Violin Plot")
     plt.figure(figsize=(10, 6))
     sns.boxplot(x='property_type', y='price', data=df, palette="Set2")
@@ -125,42 +146,114 @@ def advanced_visualizations(df):
     st.pyplot(plt)
     st.write("This combined box and violin plot visualizes price distributions across property types. The violin plot provides a density estimate of the price distribution, highlighting variations within types.")
 
-# Main app
+# ------------------ Predictive Analysis ------------------ #
+
+
+
+# Load your DataFrame 
+df = pd.read_csv("D:\GUVI_Projects\My_Projects\cleaned_airbnb_data.csv")
+
+def calculate_sums(df):
+    df['last_scraped_days'] = (df['last_scraped'] - pd.Timestamp('1970-01-01')) // pd.Timedelta('1D')
+    
+    sums = {
+        'total_reviews_per_month': df['reviews_per_month'].sum(),
+        'total_last_scraped_days': df['last_scraped_days'].sum(),
+        'total_bedrooms': df['bedrooms'].sum(),
+        'total_latitude': df['latitude'].sum(),
+        'total_longitude': df['longitude'].sum(),
+        'total_price_per_bedroom': df['price_per_bedroom'].sum(),
+    }
+    
+    return sums
+
+def predictive_analysis(df, model=None, scaler=None):
+    st.title("Predictive Analysis: Airbnb Price Prediction")
+
+    st.header("Enter Feature Values")
+    
+    # Define the input features
+    user_inputs = {
+        "Reviews Per Month": st.number_input("Reviews Per Month", min_value=0.0, step=0.1),
+        "Last Scraped Date": st.date_input("Last Scraped Date"),
+        "Number of Bedrooms": st.number_input("Number of Bedrooms", min_value=0, step=1),
+        "Property Type": st.selectbox("Property Type", options=df['property_type'].unique()),
+        "Latitude": st.number_input("Latitude"),
+        "Longitude": st.number_input("Longitude"),
+        "Price Per Bedroom": st.number_input("Price Per Bedroom", min_value=0.0, step=0.1),
+        "Name (ID)": st.number_input("Property Name (ID)", min_value=0, step=1)  # Added name input as integer
+    }
+
+    # Convert last scraped date to days since epoch for model input
+    last_scraped_days = (pd.to_datetime(user_inputs["Last Scraped Date"]) - pd.to_datetime('1970-01-01')).days
+
+    # Prepare input data for the model
+    input_data = pd.DataFrame({
+        'reviews_per_month': [user_inputs["Reviews Per Month"]],
+        'last_scraped': [last_scraped_days],  # Keep as numerical days since epoch
+        'bedrooms': [user_inputs["Number of Bedrooms"]],
+        'property_type': [user_inputs["Property Type"]],
+        'latitude': [user_inputs["Latitude"]],
+        'longitude': [user_inputs["Longitude"]],
+        'price_per_bedroom': [user_inputs["Price Per Bedroom"]],
+        'name': [int(user_inputs["Name (ID)"])]  # Ensure name is treated as integer
+    })
+
+    # Dynamic encoding for property type if needed
+    df, property_type_encoder = encode_features(df, 'property_type')
+    
+    # Ensure that property type is encoded before prediction
+    property_type_encoded = property_type_encoder.transform(input_data['property_type'])
+    
+    # Update input_data with encoded property type
+    input_data['property_type'] = property_type_encoded
+
+    # Scale input data if a scaler is provided
+    if scaler is not None:
+        input_data = scaler.transform(input_data)
+
+    # Display button and predict when pressed
+    if st.button("Predict Price"):
+        try:
+            predicted_price = model.predict(input_data)[0]
+            st.success(f"The predicted price is ${predicted_price:.2f}")
+        except Exception as e:
+            st.error(f"An error occurred during prediction: {str(e)}")
+
+    # Display the sums of specified columns
+    st.header("Data Summary")
+    sums = calculate_sums(df)
+    for key, value in sums.items():
+        st.write(f"{key}: {value:.2f}")
+
+
+
+# ------------------ Main Application ------------------ #
 def main():
     st.sidebar.title("Navigation")
-    selected_page = st.sidebar.radio("Select Page", ["Home", "Geospatial Visualization", "Price Analysis", 
-                                                       "Availability Analysis", "Advanced Visualizations"])
+    selected_page = st.sidebar.radio(
+        "Select Page", 
+        ["Home", "Geospatial Visualization", "Price Analysis", 
+         "Availability Analysis", "Advanced Visualizations", "Predictive Analysis"]
+    )
 
-    file_path = r'D:\GUVI_Projects\My_Projects\updated_cleaned_airbnb_data.csv'
-    df = load_data(file_path)
+    # Load the appropriate data and model
+    if selected_page == "Predictive Analysis":
+        df = load_data(cleaned_data_path)  # Use cleaned data for prediction
+        model = load_model(best_model_path)
+    else:
+        df = load_data(file_path)  # Use updated data for other pages
 
-    # Home Page
+    # Page Navigation
     if selected_page == "Home":
         st.title("Airbnb Analysis")
-        st.write("Welcome to the Airbnb Analysis Project")
-        
         st.markdown("""
-        ## Project Title
-        **Airbnb Analysis**
-
-        ## Skills Takeaway From This Project
-        Python scripting, Data Preprocessing, Visualization,
-        EDA, Streamlit, MongoDB, PowerBI or Tableau 
-
-        ## Domain
-        Travel Industry, Property Management, and Tourism 
-
-        ## Problem Statement
-        This project aims to analyze Airbnb data using MongoDB Atlas, perform data cleaning and preparation, develop interactive geospatial visualizations, and create dynamic plots to gain insights into pricing variations, availability patterns, and location-based trends.
-        
-        ## Creator
-        **Shubhangi Patil**
-
-        ## Project
-        Data Science
-
-        ## GitHub Link
-        [GitHub Repository](https://github.com/shubhangivspatil)
+        ## Airbnb Analysis Project  
+        **Project Creator:** Shubhangi Patil  
+        **Skills:** Python, EDA, Data Visualization, Streamlit, and more  
+        **Domain:** Travel, Property Management, and Tourism  
+        **Problem Statement:** Analyze Airbnb data to uncover trends in pricing, availability, and property types.
+        **GitHub:** [GitHub Repository](https://github.com/shubhangivspatil)
         """)
 
     elif selected_page == "Geospatial Visualization":
@@ -175,5 +268,9 @@ def main():
     elif selected_page == "Advanced Visualizations":
         advanced_visualizations(df)
 
+    elif selected_page == "Predictive Analysis":
+        predictive_analysis(df, model)
+
 if __name__ == "__main__":
     main()
+
